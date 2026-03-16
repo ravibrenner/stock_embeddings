@@ -1,7 +1,7 @@
 ---
 title: "Learning about embedding matrices using stock prices"
 author: "Ravi Brenner"
-format: github_document
+format: ansi
 engine: jupyter
 ---
 
@@ -106,10 +106,43 @@ plt.tight_layout(rect=[0, 0.03, 1, 0.96])
 plt.show()
 ```
 
-I would say the log transformation helps with volume, but doesn't make much of a difference for the open/high/low/close featuers.
+I would say the log transformation helps with volume, but doesn't make much of a difference for the open/high/low/close features.
 
 ```{python}
 df["LogVolume"] = np.log1p(df["Volume"])
+```
+
+That said, I do want to convert the open/high/low/close features to *returns* rather than prices. That is, I want the percentage change relative to the previous day's closing price. This puts them on a consistent -1 to 1 scale.
+
+```{python}
+price_features = ["Open", "High", "Low", "Close"]
+df["prev_close"] = df.groupby("Name")["Close"].shift(1)
+for feature in price_features:
+    df[f"{feature}_ret"] = (df[feature] - df["prev_close"]) / df["prev_close"]
+
+df.dropna(subset=["prev_close"] + [f"{f}_ret" for f in price_features], inplace=True)
+```
+
+Now we can quickly plot those for a single stock:
+
+```{python}
+ticker = "GOOGL"
+df_temp = df[df["Name"] == ticker]
+features_to_examine = ["Open_ret", "High_ret", "Low_ret", "Close_ret", "Volume"]
+fig, axes = plt.subplots(len(features_to_examine), 2, figsize=(12, 16))
+fig.suptitle('Original vs. Log-Transformed Distributions', fontsize=16)
+
+for i, feature in enumerate(features_to_examine):
+    # Original Data
+    sns.histplot(df_temp[feature], ax=axes[i, 0], kde=True)
+    axes[i, 0].set_title(f'Original {feature}')
+    
+    # Log-Transformed Data
+    sns.histplot(np.log1p(df_temp[feature]), ax=axes[i, 1], kde=True, color='orange')
+    axes[i, 1].set_title(f'Log-Transformed {feature}')
+
+plt.tight_layout(rect=[0, 0.03, 1, 0.96])
+plt.show()
 ```
 
 ## Getting Stock tickers
@@ -155,7 +188,7 @@ The code below rebuilds the `train_df`, `val_df`, and `test_df` dataframes with 
 ```{python}
 # Dictionary to store a scaler for each stock, needed for inverse transform later
 scalers = {}
-features_to_scale = ["Open", "High", "Low", "Close", "LogVolume"]
+features_to_scale = ["Open_ret", "High_ret", "Low_ret", "Close_ret", "LogVolume"]
 
 # Create empty lists to hold the scaled dataframes for each split
 scaled_train_list = []
@@ -163,7 +196,7 @@ scaled_val_list = []
 scaled_test_list = []
 
 for ticker in stock_tickers:
-    # We'll use a (-1, 1) range, which is often better for GRU/LSTM models
+    # We'll use a (-1, 1) range, which is often better for GRU
     scaler = MinMaxScaler(feature_range=(-1, 1))
 
     # Isolate the data for the current ticker from each split
@@ -191,18 +224,7 @@ val_df = pd.concat(scaled_val_list)
 test_df = pd.concat(scaled_test_list)
 ```
 
-Now plot that same data again:
 
-```{python}
-plt.clf()
-sns.set_theme(style="whitegrid")
-stocks_to_plot = ["AAPL", "MSFT", "GOOGL"]
-sns.lineplot(x="Date", y="Close", hue = "Name", data=train_df[train_df["Name"].isin(stocks_to_plot)])
-plt.title("Stock Prices for AAPL, MSFT, and GOOGL")
-plt.show()
-```
-
-You can now more reasonably compare the performance of those stocks, on a one-to-one basis.
 
 ## Sequence creation
 
@@ -227,9 +249,9 @@ def create_sequences(data, sequence_length, feature_cols, ticker_col, target_col
     return np.array(xs), np.array(ys), np.array(ticker_idx)
 
 sequence_length = 20
-feature_cols = ["Open", "High", "Low", "Close", "LogVolume"]
+feature_cols = ["Open_ret", "High_ret", "Low_ret", "Close_ret", "LogVolume"]
 ticker_col = "TickerInt"
-target_col = "Close"
+target_col = "Close_ret"
 
 X_train, y_train, train_ticker_idx = create_sequences(train_df, sequence_length, feature_cols, ticker_col, target_col)
 X_val, y_val, val_ticker_idx = create_sequences(val_df, sequence_length, feature_cols, ticker_col, target_col)
@@ -482,7 +504,7 @@ predictions_unscaled = []
 truth_unscaled = []
 
 # Find the index of the 'Close' column, which is our target variable
-close_feature_index = features_to_scale.index("Close")
+close_feature_index = features_to_scale.index("Close_ret")
 num_features = len(features_to_scale)
 
 for i in range(len(predictions_scaled)):
