@@ -42,12 +42,12 @@ set_seed(42)
 
 ## Data
 
-The data we will use is [DJIA 30 Stock Time Series](https://www.kaggle.com/datasets/szrlee/stock-time-series-20050101-to-20171231) from Kaggle, which contains daily stock prices for the 30 companies in the Dow Jones Industrial Average (DJIA) from January 1, 2005 to December 31, 2017. We will focus on the closing prices of these stocks in 2017.
+The data we will use is [DJIA 30 Stock Time Series](https://www.kaggle.com/datasets/szrlee/stock-time-series-20050101-to-20171231) from Kaggle, which contains daily stock prices for the 30 companies in the Dow Jones Industrial Average (DJIA) from January 1, 2006 to December 31, 2017. 
 
 
 ```{python}
 # Load the data
-df = pd.read_csv("all_stocks_2017-01-01_to_2018-01-01.csv")
+df = pd.read_csv("all_stocks_2006-01-01_to_2018-01-01.csv")
 df.info()
 ```
 
@@ -61,7 +61,6 @@ df["Date"] = pd.to_datetime(df["Date"])
 df.isnull().sum()
 
 # Fill missing values
-# It's safer to sort by ticker and date before filling to prevent data leakage across stocks
 df.sort_values(by=["Name", "Date"], inplace=True)
 df.ffill(inplace=True)
 ```
@@ -156,7 +155,7 @@ The code below rebuilds the `train_df`, `val_df`, and `test_df` dataframes with 
 ```{python}
 # Dictionary to store a scaler for each stock, needed for inverse transform later
 scalers = {}
-features_to_scale = ["Open", "High", "Low", "Close", "Volume"]
+features_to_scale = ["Open", "High", "Low", "Close", "LogVolume"]
 
 # Create empty lists to hold the scaled dataframes for each split
 scaled_train_list = []
@@ -247,7 +246,7 @@ print(f"Unique tickers count: {len(set(train_ticker_idx))}")
 
 ```
 
-So the training data has dimension [4805, 20, 5], which means that there are 4805 days, each with 20 preceding window days, and 5 features. Then there are 4805 close prices, all corresponding to a list of 4805 tickers. But that list of tickers is repeptitive; there are 31 tickers in total, as we would expect.
+So the training data has dimension [64906, 20, 5], which means that there are 64,906 sequences of days, each with 20 preceding window days, and 5 features. Then there are 64,906 close prices, all corresponding to a list of 64,906 tickers. But that list of tickers is repeptitive; there are 31 tickers in total, as we would expect.
 
 # Data loading with pytorch
 
@@ -345,7 +344,7 @@ model = StockGRU(num_stocks=len(stock_tickers),
                  input_features=len(feature_cols),
                  hidden_size=64,
                  num_layers=2,
-                 dropout_prob=0.2).to(device)
+                 dropout_prob=0.4).to(device)
 ```
 
 # Training the model
@@ -356,10 +355,14 @@ Now we will train the model using backpropagation. Note that we have not actuall
 ```{python}
 # Loss function and optimizer
 criterion = nn.MSELoss()
-optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
+
+# Add weight_decay for L2 regularization to penalize large weights
+optimizer = torch.optim.Adam(model.parameters(), lr=0.001, weight_decay=1e-5)
+
+scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', factor=0.5, patience=2, verbose=True)
 
 # Training setup
-num_epochs = 50
+num_epochs = 25
 best_val_loss = float('inf')
 train_losses = []
 val_losses = []
@@ -407,6 +410,9 @@ for epoch in range(num_epochs):
 
     epoch_val_loss = val_loss / len(val_loader)
     val_losses.append(epoch_val_loss)
+    
+    scheduler.step(epoch_val_loss)
+
 
     print(f"Epoch {epoch+1}/{num_epochs}, Train Loss: {epoch_train_loss:.4f}, Val Loss: {epoch_val_loss:.4f}")
 
@@ -420,7 +426,7 @@ print("\n Training Complete")
 
 ```
 
-Now we can plot the training and validation loss over time
+Now we can plot the training and validation loss over time:
 
 ```{python}
 plt.clf()
